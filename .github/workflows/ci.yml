@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BearSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libbearssl-dev
+
+      - name: Run tests
+        run: make test
+
+      - name: Build release
+        run: make release
+
+      - name: Binary size
+        run: ls -lh noclaw
+
+      - name: Build debug (ASan + UBSan)
+        run: make clean && make debug

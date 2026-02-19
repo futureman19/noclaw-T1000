@@ -1,0 +1,5 @@
+noclaw
+noclaw_test
+src/*.o
+*.dSYM/
+.DS_Store

@@ -1,0 +1,475 @@
+/*
+ * Memory backend: flat-file with keyword search.
+ * File format: one record per line, tab-separated: key\tcontent\ttimestamp
+ * Search: tokenize query, scan entries, count matching words, return top N.
+ * No SQLite, no FTS5 — the LLM is the ranker.
+ */
+
+#include "nc.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
+#include <ctype.h>
+#include <strings.h>
+
+/* ── Flat-file context ───────────────────────────────────────── */
+
+typedef struct {
+    char path[512];
+} flat_mem;
+
+/* ── Flat-file escape/unescape (tab and newline break the format) ── */
+
+static void flat_escape(const char *in, char *out, size_t out_cap) {
+    size_t j = 0;
+    for (size_t i = 0; in[i] && j + 2 < out_cap; i++) {
+        if (in[i] == '\t')      { out[j++] = '\\'; out[j++] = 't'; }
+        else if (in[i] == '\n') { out[j++] = '\\'; out[j++] = 'n'; }
+        else if (in[i] == '\\') { out[j++] = '\\'; out[j++] = '\\'; }
+        else                    { out[j++] = in[i]; }
+    }
+    out[j] = '\0';
+}
+
+static void flat_unescape(char *s) {
+    char *r = s, *w = s;
+    while (*r) {
+        if (*r == '\\' && r[1]) {
+            r++;
+            if (*r == 't')      *w++ = '\t';
+            else if (*r == 'n') *w++ = '\n';
+            else if (*r == '\\') *w++ = '\\';
+            else { *w++ = '\\'; *w++ = *r; }
+            r++;
+        } else {
+            *w++ = *r++;
+        }
+    }
+    *w = '\0';
+}
+
+/* ── Helpers ─────────────────────────────────────────────────── */
+
+/* Case-insensitive substring check */
+static bool contains_word(const char *haystack, const char *word, size_t wlen) {
+    for (const char *p = haystack; *p; p++) {
+        if (strncasecmp(p, word, wlen) == 0) {
+            /* Check word boundary: start of string or non-alnum before */
+            if (p == haystack || !isalnum((unsigned char)p[-1])) {
+                char after = p[wlen];
+                if (after == '\0' || !isalnum((unsigned char)after))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Count how many query tokens appear in text (key + content) */
+static int score_entry(const char *key, const char *content,
+                       const char *tokens[], int token_lens[], int ntokens) {
+    int score = 0;
+    for (int i = 0; i < ntokens; i++) {
+        if (contains_word(key, tokens[i], (size_t)token_lens[i]))
+            score += 2;  /* key match worth more */
+        if (contains_word(content, tokens[i], (size_t)token_lens[i]))
+            score += 1;
+    }
+    return score;
+}
+
+/* Tokenize query into words (pointers into original string) */
+static int tokenize(const char *query, const char *tokens[], int lens[], int max) {
+    int n = 0;
+    const char *p = query;
+    while (*p && n < max) {
+        while (*p && !isalnum((unsigned char)*p)) p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && isalnum((unsigned char)*p)) p++;
+        tokens[n] = start;
+        lens[n] = (int)(p - start);
+        n++;
+    }
+    return n;
+}
+
+/* ── File I/O helpers ────────────────────────────────────────── */
+
+/* Read entire file into malloc'd buffer. Returns NULL if file doesn't exist. */
+static char *read_all(const char *path, size_t *out_len) {
+    FILE *f = fopen(path, "r");
+    if (!f) { *out_len = 0; return NULL; }
+
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (sz <= 0) { fclose(f); *out_len = 0; return NULL; }
+
+    char *buf = (char *)malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); *out_len = 0; return NULL; }
+
+    *out_len = fread(buf, 1, (size_t)sz, f);
+    buf[*out_len] = '\0';
+    fclose(f);
+    return buf;
+}
+
+/* Write buffer to file atomically (write to .tmp, rename) */
+static bool write_all(const char *path, const char *data, size_t len) {
+    char tmp[520];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+
+    FILE *f = fopen(tmp, "w");
+    if (!f) return false;
+
+    if (len > 0 && fwrite(data, 1, len, f) != len) {
+        fclose(f);
+        remove(tmp);
+        return false;
+    }
+    fclose(f);
+    return rename(tmp, path) == 0;
+}
+
+/* ── Store ───────────────────────────────────────────────────── */
+
+static bool flat_store(nc_memory *self, const char *key, const char *content) {
+    flat_mem *ctx = (flat_mem *)self->ctx;
+    if (!ctx) return false;
+
+    time_t now = time(NULL);
+
+    /* Escape key and content so tabs/newlines don't break the format */
+    char esc_key[1024], esc_content[8192];
+    flat_escape(key, esc_key, sizeof(esc_key));
+    flat_escape(content, esc_content, sizeof(esc_content));
+    size_t eklen = strlen(esc_key);
+
+    /* Read existing file */
+    size_t flen = 0;
+    char *data = read_all(ctx->path, &flen);
+
+    /* Build new file: replace line with matching key, or append */
+    size_t new_cap = flen + eklen + strlen(esc_content) + 64;
+    char *out = (char *)malloc(new_cap);
+    if (!out) { free(data); return false; }
+
+    size_t out_len = 0;
+
+    /* Copy existing lines, skipping the one with matching key */
+    if (data) {
+        char *line = data;
+        while (*line) {
+            char *eol = strchr(line, '\n');
+            size_t llen = eol ? (size_t)(eol - line) : strlen(line);
+
+            /* Check if this line's key matches (stored escaped) */
+            bool skip = false;
+            if (llen > eklen) {
+                skip = (memcmp(line, esc_key, eklen) == 0 && line[eklen] == '\t');
+            }
+
+            if (!skip && llen > 0) {
+                memcpy(out + out_len, line, llen);
+                out_len += llen;
+                out[out_len++] = '\n';
+            }
+
+            line += llen;
+            if (*line == '\n') line++;
+        }
+    }
+
+    /* Append the new/updated entry (escaped) */
+    int n = snprintf(out + out_len, new_cap - out_len, "%s\t%s\t%ld\n",
+                     esc_key, esc_content, (long)now);
+    if (n > 0) out_len += (size_t)n;
+
+    bool ok = write_all(ctx->path, out, out_len);
+
+    free(out);
+    free(data);
+    return ok;
+}
+
+/* ── Recall ──────────────────────────────────────────────────── */
+
+typedef struct { int score; const char *key; size_t klen; const char *content; size_t clen; } match_t;
+
+static bool flat_recall(nc_memory *self, const char *query, char *out, size_t out_cap) {
+    flat_mem *ctx = (flat_mem *)self->ctx;
+    if (!ctx) return false;
+
+    size_t flen = 0;
+    char *data = read_all(ctx->path, &flen);
+    if (!data) {
+        nc_strlcpy(out, "No matching memories found.", out_cap);
+        return false;
+    }
+
+    /* Tokenize query */
+    const char *tokens[32];
+    int lens[32];
+    int ntokens = tokenize(query, tokens, lens, 32);
+    if (ntokens == 0) {
+        free(data);
+        nc_strlcpy(out, "No matching memories found.", out_cap);
+        return false;
+    }
+
+    /* Score all entries, keep top 5 */
+    match_t top[5] = {{0}};
+
+    char *line = data;
+    while (*line) {
+        char *eol = strchr(line, '\n');
+        size_t llen = eol ? (size_t)(eol - line) : strlen(line);
+        if (llen == 0) { line++; continue; }
+
+        /* Temporarily null-terminate line */
+        char saved = line[llen];
+        line[llen] = '\0';
+
+        /* Parse: key\tcontent\ttimestamp */
+        char *tab1 = strchr(line, '\t');
+        if (tab1) {
+            *tab1 = '\0';
+            char *val = tab1 + 1;
+            char *tab2 = strchr(val, '\t');
+            if (tab2) *tab2 = '\0';
+
+            int sc = score_entry(line, val, tokens, lens, ntokens);
+            if (sc > 0) {
+                /* Insert into top-5 (sorted descending) */
+                for (int i = 0; i < 5; i++) {
+                    if (sc > top[i].score) {
+                        /* Shift down */
+                        for (int j = 4; j > i; j--) top[j] = top[j-1];
+                        top[i] = (match_t){ .score = sc, .key = line,
+                                            .klen = (size_t)(tab1 - line),
+                                            .content = val,
+                                            .clen = tab2 ? (size_t)(tab2 - val) : strlen(val) };
+                        break;
+                    }
+                }
+            }
+
+            /* Restore tabs for continued parsing */
+            *tab1 = '\t';
+            if (tab2) *tab2 = '\t';
+        }
+
+        line[llen] = saved;
+        line += llen;
+        if (*line == '\n') line++;
+    }
+
+    /* Format output (unescape stored content for display) */
+    size_t off = 0;
+    int count = 0;
+    for (int i = 0; i < 5 && top[i].score > 0; i++) {
+        char key_buf[1024], content_buf[8192];
+        size_t kl = top[i].klen < sizeof(key_buf) - 1 ? top[i].klen : sizeof(key_buf) - 1;
+        memcpy(key_buf, top[i].key, kl);
+        key_buf[kl] = '\0';
+        flat_unescape(key_buf);
+
+        size_t cl = top[i].clen < sizeof(content_buf) - 1 ? top[i].clen : sizeof(content_buf) - 1;
+        memcpy(content_buf, top[i].content, cl);
+        content_buf[cl] = '\0';
+        flat_unescape(content_buf);
+
+        int n = snprintf(out + off, out_cap - off, "[%s] %s\n", key_buf, content_buf);
+        if (n > 0) off += (size_t)n;
+        count++;
+    }
+
+    free(data);
+
+    if (count == 0) {
+        nc_strlcpy(out, "No matching memories found.", out_cap);
+        return false;
+    }
+    return true;
+}
+
+/* ── Forget ──────────────────────────────────────────────────── */
+
+static bool flat_forget(nc_memory *self, const char *key) {
+    flat_mem *ctx = (flat_mem *)self->ctx;
+    if (!ctx) return false;
+
+    size_t flen = 0;
+    char *data = read_all(ctx->path, &flen);
+    if (!data) return true;  /* nothing to forget */
+
+    /* Escape key to match stored format */
+    char esc_key[1024];
+    flat_escape(key, esc_key, sizeof(esc_key));
+    size_t eklen = strlen(esc_key);
+
+    char *out = (char *)malloc(flen + 1);
+    if (!out) { free(data); return false; }
+
+    size_t out_len = 0;
+    char *line = data;
+    while (*line) {
+        char *eol = strchr(line, '\n');
+        size_t llen = eol ? (size_t)(eol - line) : strlen(line);
+
+        bool skip = (llen > eklen && memcmp(line, esc_key, eklen) == 0 && line[eklen] == '\t');
+
+        if (!skip && llen > 0) {
+            memcpy(out + out_len, line, llen);
+            out_len += llen;
+            out[out_len++] = '\n';
+        }
+
+        line += llen;
+        if (*line == '\n') line++;
+    }
+
+    bool ok = write_all(ctx->path, out, out_len);
+    free(out);
+    free(data);
+    return ok;
+}
+
+/* ── Free ────────────────────────────────────────────────────── */
+
+static void flat_free(nc_memory *self) {
+    flat_mem *ctx = (flat_mem *)self->ctx;
+    if (ctx) free(ctx);
+    self->ctx = NULL;
+}
+
+/* ── Constructor ─────────────────────────────────────────────── */
+
+nc_memory nc_memory_flat(const char *path) {
+    flat_mem *ctx = (flat_mem *)calloc(1, sizeof(flat_mem));
+    if (!ctx) return nc_memory_noop();
+
+    nc_strlcpy(ctx->path, path, sizeof(ctx->path));
+    nc_log(NC_LOG_INFO, "Memory: flat-file at %s", path);
+
+    return (nc_memory){
+        .backend_name = "flat",
+        .ctx     = ctx,
+        .store   = flat_store,
+        .recall  = flat_recall,
+        .forget  = flat_forget,
+        .free    = flat_free,
+    };
+}
+
+/* ── Noop fallback ───────────────────────────────────────────── */
+
+static bool noop_store(nc_memory *self, const char *key, const char *content) {
+    (void)self; (void)key; (void)content;
+    return true;
+}
+
+static bool noop_recall(nc_memory *self, const char *query, char *out, size_t out_cap) {
+    (void)self; (void)query;
+    nc_strlcpy(out, "Memory not available.", out_cap);
+    return false;
+}
+
+static bool noop_forget(nc_memory *self, const char *key) {
+    (void)self; (void)key;
+    return true;
+}
+
+static void noop_free(nc_memory *self) {
+    (void)self;
+}
+
+nc_memory nc_memory_noop(void) {
+    return (nc_memory){
+        .backend_name = "noop",
+        .ctx = NULL,
+        .store  = noop_store,
+        .recall = noop_recall,
+        .forget = noop_forget,
+        .free   = noop_free,
+    };
+}
+
+/* ── Tests ───────────────────────────────────────────────────── */
+
+#ifdef NC_TEST
+#include <unistd.h>
+
+void nc_test_memory(void) {
+    /* Use a temp file for testing */
+    char tmppath[] = "/tmp/noclaw_test_mem_XXXXXX";
+    int fd = mkstemp(tmppath);
+    NC_ASSERT(fd >= 0, "create temp file for memory test");
+    close(fd);
+
+    nc_memory mem = nc_memory_flat(tmppath);
+    NC_ASSERT(strcmp(mem.backend_name, "flat") == 0, "flat backend name");
+
+    /* Store */
+    bool ok = mem.store(&mem, "greeting", "Hello, world!");
+    NC_ASSERT(ok, "memory store greeting");
+
+    ok = mem.store(&mem, "project", "noclaw is written in C");
+    NC_ASSERT(ok, "memory store project");
+
+    ok = mem.store(&mem, "language", "C is fast and small");
+    NC_ASSERT(ok, "memory store language");
+
+    /* Recall by keyword search */
+    char buf[4096];
+    ok = mem.recall(&mem, "noclaw", buf, sizeof(buf));
+    NC_ASSERT(ok, "memory recall noclaw");
+    NC_ASSERT(strstr(buf, "noclaw") != NULL, "recall result contains noclaw");
+
+    /* Recall with no match */
+    ok = mem.recall(&mem, "xyznonexistent", buf, sizeof(buf));
+    NC_ASSERT(!ok, "recall returns false for no match");
+
+    /* Upsert (store with existing key) */
+    ok = mem.store(&mem, "greeting", "Updated greeting!");
+    NC_ASSERT(ok, "memory upsert greeting");
+
+    ok = mem.recall(&mem, "Updated", buf, sizeof(buf));
+    NC_ASSERT(ok, "recall finds updated content");
+    NC_ASSERT(strstr(buf, "Updated greeting") != NULL, "upsert overwrote content");
+
+    /* Forget */
+    ok = mem.forget(&mem, "greeting");
+    NC_ASSERT(ok, "memory forget greeting");
+
+    ok = mem.recall(&mem, "Updated greeting", buf, sizeof(buf));
+    NC_ASSERT(!ok, "recall returns false after forget");
+
+    /* Multiple results ranking */
+    mem.store(&mem, "c_info_1", "C language was created in 1972");
+    mem.store(&mem, "c_info_2", "C is used for systems programming");
+    mem.store(&mem, "c_info_3", "C compilers include gcc and clang");
+
+    ok = mem.recall(&mem, "C language", buf, sizeof(buf));
+    NC_ASSERT(ok, "recall multiple C results");
+
+    /* Free */
+    mem.free(&mem);
+    NC_ASSERT(mem.ctx == NULL, "memory free nulls ctx");
+
+    /* Cleanup */
+    unlink(tmppath);
+
+    /* Test noop fallback */
+    nc_memory noop = nc_memory_noop();
+    NC_ASSERT(strcmp(noop.backend_name, "noop") == 0, "noop backend name");
+    ok = noop.store(&noop, "key", "val");
+    NC_ASSERT(ok, "noop store returns true");
+    ok = noop.recall(&noop, "anything", buf, sizeof(buf));
+    NC_ASSERT(!ok, "noop recall returns false");
+    noop.free(&noop);
+}
+#endif
