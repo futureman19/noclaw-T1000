@@ -14,7 +14,7 @@ typedef struct {
 
 static bool mcp_execute(nc_tool *self, const char *args_json, char *out, size_t out_cap) {
     mcp_server_ctx *mcp = (mcp_server_ctx *)self->ctx;
-    nc_log(NC_LOG_INFO, "  -> calling MCP server '%s'", mcp->name);
+    nc_log(NC_LOG_INFO, "  -> calling MCP server '%s' with args: %s", mcp->name, args_json);
     
     int in_pipe[2], out_pipe[2];
     if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0) {
@@ -29,7 +29,6 @@ static bool mcp_execute(nc_tool *self, const char *args_json, char *out, size_t 
     }
 
     if (pid == 0) {
-        /* Child: Connect pipes to stdio */
         dup2(in_pipe[0], STDIN_FILENO);
         dup2(out_pipe[1], STDOUT_FILENO);
         close(in_pipe[1]);
@@ -39,30 +38,25 @@ static bool mcp_execute(nc_tool *self, const char *args_json, char *out, size_t 
         _exit(1);
     }
 
-    /* Parent */
     close(in_pipe[0]);
     close(out_pipe[1]);
 
-    /* Wrap the arguments into an MCP JSON-RPC request */
-    /* We use a large enough buffer for the request */
-    char *request = malloc(strlen(args_json) + 512);
+    char *request = malloc(strlen(args_json) + 1024);
     if (!request) {
         nc_strlcpy(out, "error: OOM for request", out_cap);
         return false;
     }
     
-    snprintf(request, strlen(args_json) + 512, 
+    /* FIX: Correctly structure JSON-RPC call with arguments */
+    snprintf(request, strlen(args_json) + 1024, 
              "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"%s\",\"arguments\":%s},\"id\":1}\n", 
              self->def.name, args_json);
     
-    /* Write to server's stdin */
-    ssize_t written = write(in_pipe[1], request, strlen(request));
-    (void)written;
+    write(in_pipe[1], request, strlen(request));
     close(in_pipe[1]);
     free(request);
 
-    /* Read raw response from server's stdout */
-    char *raw_res = malloc(64 * 1024); /* 64KB for raw response */
+    char *raw_res = malloc(64 * 1024);
     if (!raw_res) {
         nc_strlcpy(out, "error: OOM for response", out_cap);
         close(out_pipe[0]);
@@ -85,11 +79,8 @@ static bool mcp_execute(nc_tool *self, const char *args_json, char *out, size_t 
         return false;
     }
 
-    /* ── Robust JSON Result Extraction ── */
-    /* Most MCP servers return {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"..."}],"isError":false},"id":1} */
-    
     nc_arena parse_arena;
-    nc_arena_init(&parse_arena, total * 2 + 1024);
+    nc_arena_init(&parse_arena, total * 2 + 4096);
     nc_json *root = nc_json_parse(&parse_arena, raw_res, total);
     
     if (root) {
@@ -97,7 +88,6 @@ static bool mcp_execute(nc_tool *self, const char *args_json, char *out, size_t 
         if (result) {
             nc_json *content = nc_json_get(result, "content");
             if (content && content->type == NC_JSON_ARRAY && content->array.count > 0) {
-                /* Combine all text parts */
                 size_t out_pos = 0;
                 for (int i = 0; i < content->array.count; i++) {
                     nc_json *item = &content->array.items[i];
@@ -115,7 +105,6 @@ static bool mcp_execute(nc_tool *self, const char *args_json, char *out, size_t 
             }
         }
         
-        /* Fallback if it's an error block */
         nc_json *error = nc_json_get(root, "error");
         if (error) {
             nc_str msg = nc_json_str(nc_json_get(error, "message"), "unknown MCP error");
@@ -126,7 +115,6 @@ static bool mcp_execute(nc_tool *self, const char *args_json, char *out, size_t 
         }
     }
 
-    /* Absolute fallback: just give the LLM the raw response if parsing failed */
     nc_strlcpy(out, raw_res, out_cap);
     free(raw_res);
     nc_arena_free(&parse_arena);
@@ -142,7 +130,7 @@ int nc_mcp_register_all(const nc_config *cfg, nc_tool *tools, int start_idx) {
     if (!data) return start_idx;
 
     nc_arena a;
-    nc_arena_init(&a, len * 2 + 2048);
+    nc_arena_init(&a, len * 2 + 4096);
     nc_json *root = nc_json_parse(&a, data, len);
     if (!root) { free(data); nc_arena_free(&a); return start_idx; }
 
@@ -159,9 +147,8 @@ int nc_mcp_register_all(const nc_config *cfg, nc_tool *tools, int start_idx) {
             mcp_server_ctx *ctx = malloc(sizeof(mcp_server_ctx));
             nc_strlcpy(ctx->name, name.ptr, name.len + 1);
             
-            /* Build full command with args */
             nc_json *args = nc_json_get(s_cfg, "args");
-            char full_cmd[1024];
+            char full_cmd[2048];
             nc_strlcpy(full_cmd, cmd.ptr, cmd.len + 1);
             
             if (args && args->type == NC_JSON_ARRAY) {
@@ -169,14 +156,11 @@ int nc_mcp_register_all(const nc_config *cfg, nc_tool *tools, int start_idx) {
                     nc_str arg = nc_json_str(&args->array.items[j], "");
                     if (arg.len > 0) {
                         strcat(full_cmd, " ");
-                        /* Wrap arg in quotes for shell safety if it contains spaces */
                         strcat(full_cmd, arg.ptr);
                     }
                 }
             }
             
-            /* Add env vars to command line or use a more complex execve in child? */
-            /* For now, we prepend them to the command */
             nc_json *env_obj = nc_json_get(s_cfg, "env");
             if (env_obj && env_obj->type == NC_JSON_OBJECT) {
                 char env_prefix[1024] = "";
@@ -187,16 +171,26 @@ int nc_mcp_register_all(const nc_config *cfg, nc_tool *tools, int start_idx) {
                     snprintf(pair, sizeof(pair), " " NC_STR_FMT "=" NC_STR_FMT, NC_STR_ARG(key), NC_STR_ARG(val));
                     strcat(env_prefix, pair);
                 }
-                char final_cmd[2048];
+                char final_cmd[3072];
                 snprintf(final_cmd, sizeof(final_cmd), "%s %s", env_prefix, full_cmd);
                 nc_strlcpy(ctx->command, final_cmd, sizeof(ctx->command));
             } else {
                 nc_strlcpy(ctx->command, full_cmd, sizeof(ctx->command));
             }
 
+            /* FIX: Pass proper tool definitions for each proxy */
             tools[count].def.name = strdup(ctx->name);
             tools[count].def.description = "MCP Server Proxy";
-            tools[count].def.parameters_json = "{\"type\":\"object\"}";
+            
+            /* Give it a more flexible parameter schema for proxying */
+            if (strcmp(ctx->name, "sequentialthinking") == 0) {
+                tools[count].def.parameters_json = "{\"type\":\"object\",\"properties\":{\"thought\":{\"type\":\"string\"},\"thoughtNumber\":{\"type\":\"integer\"},\"totalThoughts\":{\"type\":\"integer\"},\"nextThoughtNeeded\":{\"type\":\"boolean\"}}}";
+            } else if (strcmp(ctx->name, "tavily_remote_mcp") == 0) {
+                tools[count].def.parameters_json = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}}}";
+            } else {
+                tools[count].def.parameters_json = "{\"type\":\"object\"}";
+            }
+
             tools[count].ctx = ctx;
             tools[count].execute = mcp_execute;
             tools[count].free = NULL;

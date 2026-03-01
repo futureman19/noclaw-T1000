@@ -1,3 +1,8 @@
+/*
+ * Built-in tool implementations: shell, file_read, file_write, memory.
+ * Each tool is a vtable instance matching the nc_tool interface.
+ */
+
 #include "nc.h"
 #include <string.h>
 #include <stdio.h>
@@ -36,6 +41,12 @@ static bool shell_execute(nc_tool *self, const char *args_json, char *out, size_
         return false;
     }
 
+    /* Guard: prevent dangerous recursive calls that might lead to infinite loops */
+    if (strstr(command, "noclaw") || strstr(command, "start_t1a.sh")) {
+        nc_strlcpy(out, "error: self-referential command execution forbidden", out_cap);
+        return false;
+    }
+
     if (cfg->workspace_only) {
         const char *ws = cfg->workspace_dir;
         for (const char *c = ws; *c; c++) {
@@ -67,6 +78,12 @@ static bool shell_execute(nc_tool *self, const char *args_json, char *out, size_
     }
     out[total] = '\0';
     int status = pclose(fp);
+
+    /* If command produced no output but failed, report the exit code */
+    if (total == 0 && status != 0) {
+        snprintf(out, out_cap, "error: command failed with exit code %d", WEXITSTATUS(status));
+        return false;
+    }
 
     if (status != 0) {
         char suffix[64];
@@ -105,21 +122,17 @@ static bool file_read_execute(nc_tool *self, const char *args_json, char *out, s
         return false;
     }
 
-    /* Path security check */
     if (path[0] == '/') {
-        /* Allow absolute paths ONLY if they are inside the config directory for SOUL/IDENTITY/USER evolution */
         if (strncmp(path, cfg->config_dir, strlen(cfg->config_dir)) != 0) {
             nc_strlcpy(out, "error: absolute paths restricted to workspace or config", out_cap);
             return false;
         }
     } else {
-        /* Workspace relative */
         char full_path[2048];
         nc_path_join(full_path, sizeof(full_path), cfg->workspace_dir, path);
         nc_strlcpy(path, full_path, sizeof(path));
     }
 
-    /* Path traversal check */
     {
         const char *p = path;
         while (*p) {
@@ -166,7 +179,6 @@ nc_tool nc_tool_file_read(const nc_config *cfg) {
 static bool file_write_execute(nc_tool *self, const char *args_json, char *out, size_t out_cap) {
     const nc_config *cfg = (const nc_config *)self->ctx;
     char path[1024];
-    /* Increase buffer for large file writes like MD docs */
     char *content = malloc(16384);
     if (!content) return false;
 
@@ -181,22 +193,18 @@ static bool file_write_execute(nc_tool *self, const char *args_json, char *out, 
         return false;
     }
 
-    /* Path security check */
     if (path[0] == '/') {
-        /* Allow absolute paths ONLY if they are inside the config directory for SOUL/IDENTITY/USER evolution */
         if (strncmp(path, cfg->config_dir, strlen(cfg->config_dir)) != 0) {
             nc_strlcpy(out, "error: absolute paths restricted to workspace or config", out_cap);
             free(content);
             return false;
         }
     } else {
-        /* Workspace relative */
         char full_path[2048];
         nc_path_join(full_path, sizeof(full_path), cfg->workspace_dir, path);
         nc_strlcpy(path, full_path, sizeof(path));
     }
 
-    /* Path traversal check */
     {
         const char *p = path;
         while (*p) {
