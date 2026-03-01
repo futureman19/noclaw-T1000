@@ -183,6 +183,14 @@ int nc_mcp_register_all(const nc_config *cfg, nc_tool *tools, int start_idx) {
                 tools[count].def.name = "tavily_remote_mcp";
                 tools[count].def.description = "Search the web for real-time information.";
                 tools[count].def.parameters_json = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}";
+            } else if (strcmp(ctx->name, "fetch") == 0) {
+                tools[count].def.name = "fetch";
+                tools[count].def.description = "Fetch content from a URL.";
+                tools[count].def.parameters_json = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}";
+            } else if (strcmp(ctx->name, "memory-graph") == 0) {
+                tools[count].def.name = "memory_graph";
+                tools[count].def.description = "Store and recall information in a knowledge graph.";
+                tools[count].def.parameters_json = "{\"type\":\"object\"}";
             } else if (strcmp(ctx->name, "sequentialthinking") == 0) {
                 tools[count].def.name = "sequentialthinking";
                 tools[count].def.description = "Plan and solve complex tasks step-by-step.";

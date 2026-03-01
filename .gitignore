@@ -2,3 +2,15 @@ obj/
 noclaw
 *.log
 .env
+*.o
+*.dSYM/
+*.DS_Store
+build/
+dist/
+release/
+release-*/
+*.tar.gz
+*.zip
+*.tar.bz2
+*.tar.xz
+*.db
