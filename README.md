@@ -9,7 +9,7 @@
   <strong>88 KB binary. 324 KB RAM. Runs on anything with a pulse.</strong>
 </p>
 
-The absolute smallest fully autonomous AI assistant infrastructure. Until someone does one in asm I guess
+The absolute smallest fully autonomous AI assistant infrastructure. Until someone [does one in asm I guess](https://github.com/Sh4d1/claw)
 
 ## Benchmark Snapshot
 
