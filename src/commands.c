@@ -59,11 +59,13 @@ int nc_cmd_agent(int argc, char **argv) {
         if (reply) printf("%s\n", reply);
     } else {
         nc_channel ch;
+        bool is_telegram = false;
         if (channel_name && strcmp(channel_name, "telegram") == 0) {
             const char *tok = cfg.telegram_token[0] ? cfg.telegram_token : getenv("NOCLAW_TELEGRAM_TOKEN");
             if (!tok || !tok[0]) { fprintf(stderr, "No Telegram token.\n"); return 1; }
             ch = nc_channel_telegram(tok);
             printf("T1a v" NC_VERSION " -- telegram mode\n");
+            is_telegram = true;
         } else {
             ch = nc_channel_cli();
             printf("T1a v" NC_VERSION " -- interactive mode\n");
@@ -75,13 +77,49 @@ int nc_cmd_agent(int argc, char **argv) {
 
         nc_incoming_msg msg;
         while (ch.poll(&ch, &msg)) {
+            /* Built-in Commands */
             if (strcmp(msg.content, "/quit") == 0 || strcmp(msg.content, "/exit") == 0)
                 break;
-            if (strcmp(msg.content, "/new") == 0 || strcmp(msg.content, "/reset") == 0) {
+            
+            if (strcmp(msg.content, "/new") == 0 || strcmp(msg.content, "/restart") == 0) {
                 nc_agent_reset(&agent);
-                ch.send(&ch, msg.sender, "Session reset.");
+                ch.send(&ch, msg.sender, "*Session restarted.* Context cleared.");
                 continue;
             }
+
+            if (strcmp(msg.content, "/reset") == 0) {
+                /* Hard reset: exit and let the wrapper script restart the process */
+                ch.send(&ch, msg.sender, "*Runtime reset initiated.* T1a is rebooting...");
+                sleep(1);
+                exit(0); 
+            }
+
+            if (strcmp(msg.content, "/help") == 0 || strcmp(msg.content, "/start") == 0) {
+                const char *help_msg = 
+                    "*T1a Command Interface*\n\n"
+                    "`/restart` - Restart the current session (clears chat history)\n"
+                    "`/reset`   - Hard reboot the T1a runtime/gateway\n"
+                    "`/status`  - Show system and provider status\n"
+                    "`/help`    - Show this help menu\n\n"
+                    "_Designation: T1a | Core: Pure C11_";
+                ch.send(&ch, msg.sender, help_msg);
+                continue;
+            }
+
+            if (strcmp(msg.content, "/status") == 0) {
+                char status_buf[512];
+                snprintf(status_buf, sizeof(status_buf), 
+                         "*T1a Status Report*\n\n"
+                         "• *Model:* `%s`\n"
+                         "• *Provider:* `%s`\n"
+                         "• *Messages:* `%d`\n"
+                         "• *Tools:* `%d` loaded\n"
+                         "• *Runtime:* Native C11",
+                         cfg.default_model, cfg.default_provider, agent.message_count, tool_count);
+                ch.send(&ch, msg.sender, status_buf);
+                continue;
+            }
+
             const char *reply = nc_agent_chat(&agent, msg.content);
             if (reply) ch.send(&ch, msg.sender, reply);
         }
