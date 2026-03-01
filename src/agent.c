@@ -16,6 +16,28 @@
 
 /* ── Init / Free ──────────────────────────────────────────────── */
 
+static void load_sys_prompt(nc_agent *agent, char *buf, size_t cap) {
+    char soul_path[1024], user_path[1024], ident_path[1024];
+    nc_path_join(soul_path, sizeof(soul_path), agent->config->config_dir, "SOUL.md");
+    nc_path_join(user_path, sizeof(user_path), agent->config->config_dir, "USER.md");
+    nc_path_join(ident_path, sizeof(ident_path), agent->config->config_dir, "IDENTITY.md");
+
+    size_t s_len, u_len, i_len;
+    char *soul = nc_read_file(soul_path, &s_len);
+    char *user = nc_read_file(user_path, &u_len);
+    char *ident = nc_read_file(ident_path, &i_len);
+
+    snprintf(buf, cap, 
+             "SYSTEM ARCHITECTURE:\n%s\n\nSOUL:\n%s\n\nUSER CONTEXT:\n%s\n",
+             ident ? ident : "Minimalist C agent.",
+             soul ? soul : "Helpful assistant.",
+             user ? user : "Unknown user.");
+
+    if (soul) free(soul);
+    if (user) free(user);
+    if (ident) free(ident);
+}
+
 void nc_agent_init(nc_agent *agent, nc_config *cfg, nc_provider *prov,
                    nc_tool *tools, int tool_count, nc_memory *mem) {
     memset(agent, 0, sizeof(*agent));
@@ -27,15 +49,13 @@ void nc_agent_init(nc_agent *agent, nc_config *cfg, nc_provider *prov,
 
     nc_arena_init(&agent->arena, 64 * 1024);
 
-    /* System prompt */
-    static const char sys_prompt[] =
-        "You are T1a, a tiny but sharp AI companion. "
-        "Built in pure C, under 100KB. You serve Azzar alongside Mema. "
-        "Be efficient, helpful, and concise. Small footprint, huge impact.";
+    /* System prompt from files */
+    char prompt_buf[8192];
+    load_sys_prompt(agent, prompt_buf, sizeof(prompt_buf));
 
     agent->messages[0] = (nc_message){
         .role = nc_arena_dup(&agent->arena, "system", 6),
-        .content = nc_arena_dup(&agent->arena, sys_prompt, sizeof(sys_prompt) - 1),
+        .content = nc_arena_dup(&agent->arena, prompt_buf, strlen(prompt_buf)),
     };
     agent->message_count = 1;
 }
@@ -187,7 +207,8 @@ const char *nc_agent_chat(nc_agent *agent, const char *user_input) {
 void nc_agent_reset(nc_agent *agent) {
     /* Copy system prompt to stack BEFORE resetting arena (avoids use-after-free) */
     char role_buf[32];
-    char content_buf[512];
+    /* Increased buffer size for potentially large prompt files */
+    char content_buf[16384];
     nc_strlcpy(role_buf, agent->messages[0].role, sizeof(role_buf));
     nc_strlcpy(content_buf, agent->messages[0].content, sizeof(content_buf));
 
