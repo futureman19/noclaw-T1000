@@ -1,8 +1,3 @@
-/*
- * Built-in tool implementations: shell, file_read, file_write, memory.
- * Each tool is a vtable instance matching the nc_tool interface.
- */
-
 #include "nc.h"
 #include <string.h>
 #include <stdio.h>
@@ -41,9 +36,7 @@ static bool shell_execute(nc_tool *self, const char *args_json, char *out, size_
         return false;
     }
 
-    /* Security: workspace scoping */
     if (cfg->workspace_only) {
-        /* Validate workspace_dir has no shell-dangerous chars */
         const char *ws = cfg->workspace_dir;
         for (const char *c = ws; *c; c++) {
             if (*c == '\'' || *c == '\\' || *c == '"' || *c == '$' ||
@@ -53,13 +46,11 @@ static bool shell_execute(nc_tool *self, const char *args_json, char *out, size_
                 return false;
             }
         }
-        /* Prepend cd to workspace */
         char full_cmd[4096];
         snprintf(full_cmd, sizeof(full_cmd), "cd '%s' && %s", cfg->workspace_dir, command);
         nc_strlcpy(command, full_cmd, sizeof(command));
     }
 
-    /* Execute and capture output */
     FILE *fp = popen(command, "r");
     if (!fp) {
         nc_strlcpy(out, "error: failed to execute command", out_cap);
@@ -114,18 +105,21 @@ static bool file_read_execute(nc_tool *self, const char *args_json, char *out, s
         return false;
     }
 
-    /* Security: workspace scoping */
-    if (cfg->workspace_only) {
-        if (path[0] == '/') {
-            nc_strlcpy(out, "error: absolute paths not allowed in workspace mode", out_cap);
+    /* Path security check */
+    if (path[0] == '/') {
+        /* Allow absolute paths ONLY if they are inside the config directory for SOUL/IDENTITY/USER evolution */
+        if (strncmp(path, cfg->config_dir, strlen(cfg->config_dir)) != 0) {
+            nc_strlcpy(out, "error: absolute paths restricted to workspace or config", out_cap);
             return false;
         }
+    } else {
+        /* Workspace relative */
         char full_path[2048];
         nc_path_join(full_path, sizeof(full_path), cfg->workspace_dir, path);
         nc_strlcpy(path, full_path, sizeof(path));
     }
 
-    /* Check for path traversal (/../ components, or leading ../) */
+    /* Path traversal check */
     {
         const char *p = path;
         while (*p) {
@@ -133,7 +127,6 @@ static bool file_read_execute(nc_tool *self, const char *args_json, char *out, s
                 nc_strlcpy(out, "error: path traversal not allowed", out_cap);
                 return false;
             }
-            /* Advance to next path component */
             const char *sl = strchr(p, '/');
             if (!sl) break;
             p = sl + 1;
@@ -172,34 +165,44 @@ nc_tool nc_tool_file_read(const nc_config *cfg) {
 
 static bool file_write_execute(nc_tool *self, const char *args_json, char *out, size_t out_cap) {
     const nc_config *cfg = (const nc_config *)self->ctx;
-    char path[1024], content[8192];
+    char path[1024];
+    /* Increase buffer for large file writes like MD docs */
+    char *content = malloc(16384);
+    if (!content) return false;
 
     if (!extract_json_string(args_json, "path", path, sizeof(path))) {
         nc_strlcpy(out, "error: missing 'path' argument", out_cap);
+        free(content);
         return false;
     }
-    if (!extract_json_string(args_json, "content", content, sizeof(content))) {
+    if (!extract_json_string(args_json, "content", content, 16384)) {
         nc_strlcpy(out, "error: missing 'content' argument", out_cap);
+        free(content);
         return false;
     }
 
-    /* Security: workspace scoping */
-    if (cfg->workspace_only) {
-        if (path[0] == '/') {
-            nc_strlcpy(out, "error: absolute paths not allowed in workspace mode", out_cap);
+    /* Path security check */
+    if (path[0] == '/') {
+        /* Allow absolute paths ONLY if they are inside the config directory for SOUL/IDENTITY/USER evolution */
+        if (strncmp(path, cfg->config_dir, strlen(cfg->config_dir)) != 0) {
+            nc_strlcpy(out, "error: absolute paths restricted to workspace or config", out_cap);
+            free(content);
             return false;
         }
+    } else {
+        /* Workspace relative */
         char full_path[2048];
         nc_path_join(full_path, sizeof(full_path), cfg->workspace_dir, path);
         nc_strlcpy(path, full_path, sizeof(path));
     }
 
-    /* Check for path traversal (/../ components) */
+    /* Path traversal check */
     {
         const char *p = path;
         while (*p) {
             if (p[0] == '.' && p[1] == '.' && (p[2] == '/' || p[2] == '\0')) {
                 nc_strlcpy(out, "error: path traversal not allowed", out_cap);
+                free(content);
                 return false;
             }
             const char *sl = strchr(p, '/');
@@ -210,9 +213,11 @@ static bool file_write_execute(nc_tool *self, const char *args_json, char *out, 
 
     if (nc_write_file(path, content, strlen(content))) {
         snprintf(out, out_cap, "Written %zu bytes to %s", strlen(content), path);
+        free(content);
         return true;
     } else {
         snprintf(out, out_cap, "error: failed to write '%s'", path);
+        free(content);
         return false;
     }
 }
