@@ -41,6 +41,7 @@ static bool mcp_execute(nc_tool *self, const char *args_json, char *out, size_t 
     close(in_pipe[0]);
     close(out_pipe[1]);
 
+    /* Build request */
     char *request = malloc(strlen(args_json) + 1024);
     if (!request) {
         nc_strlcpy(out, "error: OOM for request", out_cap);
@@ -50,7 +51,7 @@ static bool mcp_execute(nc_tool *self, const char *args_json, char *out, size_t 
     /* FIX: Correctly structure JSON-RPC call with arguments */
     snprintf(request, strlen(args_json) + 1024, 
              "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"%s\",\"arguments\":%s},\"id\":1}\n", 
-             ctx->name, args_json);
+             mcp->name, args_json);
     
     write(in_pipe[1], request, strlen(request));
     close(in_pipe[1]);
@@ -184,18 +185,6 @@ int nc_mcp_register_all(const nc_config *cfg, nc_tool *tools, int start_idx) {
                 tools[count].def.description = "Search the web for real-time information.";
                 tools[count].def.parameters_json = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}";
                 nc_strlcpy(ctx->name, "tavily_search", sizeof(ctx->name));
-            } else if (strcmp(ctx->name, "fetch") == 0) {
-                tools[count].def.name = "fetch";
-                tools[count].def.description = "Fetch content from a URL.";
-                tools[count].def.parameters_json = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"}},\"required\":[\"url\"]}";
-            } else if (strcmp(ctx->name, "memory-graph") == 0) {
-                tools[count].def.name = "memory_graph";
-                tools[count].def.description = "Store and recall information in a knowledge graph.";
-                tools[count].def.parameters_json = "{\"type\":\"object\"}";
-            } else if (strcmp(ctx->name, "sequentialthinking") == 0) {
-                tools[count].def.name = "sequentialthinking";
-                tools[count].def.description = "Plan and solve complex tasks step-by-step.";
-                tools[count].def.parameters_json = "{\"type\":\"object\",\"properties\":{\"thought\":{\"type\":\"string\"},\"thoughtNumber\":{\"type\":\"integer\"},\"totalThoughts\":{\"type\":\"integer\"},\"nextThoughtNeeded\":{\"type\":\"boolean\"}}}";
             } else {
                 tools[count].def.name = strdup(ctx->name);
                 tools[count].def.description = "MCP Server Proxy";
