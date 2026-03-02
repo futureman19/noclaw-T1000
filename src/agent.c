@@ -130,16 +130,21 @@ const char *nc_agent_chat(nc_agent *agent, const char *user_input) {
     agent_push_msg(agent, "user", user_input, NULL, NULL, 0);
 
     const char *tools_json = build_tools_json(agent);
-    /* Reduced max iterations to prevent infinite reasoning loops on SBCs */
-    int max_iterations = 12;
+    /* Increased max iterations and added fallback logic */
+    int max_iterations = 16;
 
     for (int iter = 0; iter < max_iterations; iter++) {
+        /* Force final answer on last iteration by disabling tools */
+        if (iter == max_iterations - 1) {
+            agent_push_msg(agent, "system", "System: Maximum tool iteration limit reached. Please provide a final response based on the information gathered so far.", NULL, NULL, 0);
+        }
+
         nc_chat_request req = {
             .messages = agent->messages,
             .message_count = agent->message_count,
             .model = agent->config->default_model,
             .temperature = agent->config->default_temperature,
-            .tools_json = tools_json,
+            .tools_json = (iter == max_iterations - 1) ? NULL : tools_json,
             .max_tokens = 8192,
         };
 
