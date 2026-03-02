@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 /* ── Shared helpers ───────────────────────────────────────────── */
 
@@ -213,15 +214,33 @@ static bool openai_chat(nc_provider *self, const nc_chat_request *req, nc_chat_r
     else
         snprintf(url, sizeof(url), "https://openrouter.ai/api/v1/chat/completions");
 
+    /* Retry logic for HTTP request */
+    int retries = 3;
     bool result = false;
     nc_http_response http_resp;
-    if (!nc_http_post(url, body, (size_t)body_len, headers, 2, &http_resp)) {
-        nc_log(NC_LOG_ERROR, "HTTP request failed");
-        goto cleanup;
+    memset(&http_resp, 0, sizeof(http_resp));
+
+    while (retries-- > 0) {
+        if (nc_http_post(url, body, (size_t)body_len, headers, 2, &http_resp)) {
+            if (http_resp.status == 200) {
+                break;
+            } else if (http_resp.status == 429 || http_resp.status >= 500) {
+                nc_log(NC_LOG_WARN, "Provider HTTP %d, retrying...", http_resp.status);
+                nc_http_response_free(&http_resp);
+                usleep(1000000); /* 1s backoff */
+                continue;
+            } else {
+                nc_log(NC_LOG_ERROR, "Provider fatal HTTP %d: %.200s", http_resp.status, http_resp.body);
+                goto cleanup;
+            }
+        }
+        nc_log(NC_LOG_WARN, "HTTP request failed, retrying...");
+        nc_http_response_free(&http_resp);
+        usleep(1000000);
     }
 
     if (http_resp.status != 200) {
-        nc_log(NC_LOG_ERROR, "Provider returned HTTP %d: %.200s", http_resp.status, http_resp.body);
+        nc_log(NC_LOG_ERROR, "Provider communication failed after retries.");
         goto cleanup;
     }
 
@@ -617,14 +636,33 @@ static bool anthropic_chat(nc_provider *self, const nc_chat_request *req, nc_cha
     else
         snprintf(url, sizeof(url), "https://api.anthropic.com/v1/messages");
 
+    /* Retry logic for HTTP request */
+    int retries = 3;
     bool result = false;
     nc_http_response http_resp;
-    if (!nc_http_post(url, body, (size_t)off, headers, 3, &http_resp)) {
-        goto cleanup;
+    memset(&http_resp, 0, sizeof(http_resp));
+
+    while (retries-- > 0) {
+        if (nc_http_post(url, body, (size_t)off, headers, 3, &http_resp)) {
+            if (http_resp.status == 200) {
+                break;
+            } else if (http_resp.status == 429 || http_resp.status >= 500) {
+                nc_log(NC_LOG_WARN, "Provider HTTP %d, retrying...", http_resp.status);
+                nc_http_response_free(&http_resp);
+                usleep(1000000);
+                continue;
+            } else {
+                nc_log(NC_LOG_ERROR, "Provider fatal HTTP %d: %.200s", http_resp.status, http_resp.body);
+                goto cleanup;
+            }
+        }
+        nc_log(NC_LOG_WARN, "HTTP request failed, retrying...");
+        nc_http_response_free(&http_resp);
+        usleep(1000000);
     }
 
     if (http_resp.status != 200) {
-        nc_log(NC_LOG_ERROR, "Anthropic returned HTTP %d: %.200s", http_resp.status, http_resp.body);
+        nc_log(NC_LOG_ERROR, "Provider communication failed after retries.");
         goto cleanup;
     }
 
