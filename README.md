@@ -1,23 +1,23 @@
-# T1a: The Minimalist Command Unit
+# T1a: The Autonomous Daemon
 
-T1a is an ultra-lightweight, autonomous AI agent built in pure C11. Based on the `noclaw` architecture, it is designed for maximum efficiency with a near-zero resource footprint. T1a serves as a specialized command unit alongside Mema to provide focused, high-performance assistance within the Azzar Budiyanto ecosystem.
+T1a is an ultra-lightweight, autonomous AI agent built in pure C11. Based on the `noclaw` architecture, it is designed for maximum efficiency with a near-zero resource footprint. T1a acts as a high-performance command unit, capable of running indefinitely as a background daemon to manage tasks, execute tools, and assist via CLI or HTTP gateway.
 
-## Key Features
+## Key Capabilities
 
-- **Minimalist Footprint**: ~80KB binary size with sub-1MB peak RSS.
-- **Pure C11**: Zero runtime dependencies (compiled against musl/libc and BearSSL).
-- **Native MCP Support**: Integrated Model Context Protocol (MCP) client for extensible tool capabilities.
-- **Dynamic Context**: Loads identity and soul from `SOUL.md`, `USER.md`, and `IDENTITY.md` at runtime.
-- **Telegram Native**: Optimized for Telegram Bot API with real-time typing status and Markdown support.
-- **Knowledge Graph Memory**: Persistent, structured memory management via the MCP Memory server.
+- **Ultra-Efficient**: ~100KB binary, <5MB RAM usage. Zero external runtime dependencies.
+- **Daemon-Ready**: Built for 24/7 operation with self-healing process management, signal handling (`SIGINT`/`SIGTERM`), and automated resource cleanup.
+- **Full MCP Support**: Native, robust Model Context Protocol (MCP) client. Drives complex toolchains (Postgres, Filesystem, Search) with full handshake and timeout management.
+- **Self-Managing Memory**: Implements a "flat-file" memory system with automatic pruning and trimming to prevent disk bloat over time.
+- **Resilient Autonomy**: Features a sliding-window context buffer with memory compaction, preventing OOM crashes during long-running sessions.
 
 ## Architecture
 
-T1a utilizes a function-pointer vtable architecture for providers, channels, and tools, allowing for extreme modularity without the overhead of heavy abstractions.
+T1a utilizes a modular, function-pointer based architecture for extreme flexibility without bloat:
 
-- **Providers**: Supports OpenAI-compatible APIs (OpenRouter, etc.) and Anthropic.
-- **Channels**: Native Telegram and CLI support.
-- **Tools**: Built-in shell execution, filesystem I/O, and MCP proxying.
+- **Core**: Event loop driven by non-blocking I/O (via `select`).
+- **Providers**: Native support for Anthropic (Claude 3.5 Sonnet) and OpenAI-compatible APIs.
+- **Tools**: Built-in shell, filesystem I/O, and dynamic MCP proxying.
+- **Memory**: Persistent flat-file backend with semantic-like keyword search and auto-garbage collection.
 
 ## Quick Start
 
@@ -27,22 +27,34 @@ make release
 ```
 
 ### Configuration
-Configuration is managed via `~/.noclaw/config.json` and `~/.noclaw/mcp.json`.
+Managed via `~/.noclaw/config.json`. T1a auto-generates optimized defaults on first run.
 
-### Execution
 ```bash
-# Start in Telegram mode
-./noclaw agent --channel telegram
-
-# Interactive CLI mode
-./noclaw agent
+# Initialize configuration
+./noclaw onboard --api-key sk-or-... --provider openrouter
 ```
 
-## Standards & Philosophy
+### Execution
 
-- **Efficiency First**: No wasted cycles, no unnecessary bloat.
-- **Pragmatic Design**: Built to solve problems with the least amount of code possible.
-- **Security**: Strict workspace scoping and input validation.
+```bash
+# Run as an interactive CLI agent
+./noclaw agent
+
+# Run as a background daemon (Telegram/Gateway mode)
+./noclaw agent --channel telegram &
+```
+
+## Daemon Features
+
+- **Graceful Shutdown**: Catches termination signals to kill child MCP processes, preventing zombies.
+- **Anti-Stuck Logic**: Detects and breaks infinite reasoning loops.
+- **Heartbeat**: Periodic self-checks to ensure system stability.
+
+## Philosophy
+
+- **Efficiency First**: No wasted cycles, no unnecessary allocations.
+- **Robustness**: Designed to run for months without restarting.
+- **Pragmatism**: Solves problems using standard syscalls and simple algorithms.
 
 ---
-"Wong edan mah ajaib."
+*"Wong edan mah ajaib."*
