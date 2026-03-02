@@ -1,60 +1,74 @@
 # T1a: The Autonomous Daemon
 
-T1a is an ultra-lightweight, autonomous AI agent built in pure C11. Based on the `noclaw` architecture, it is designed for maximum efficiency with a near-zero resource footprint. T1a acts as a high-performance command unit, capable of running indefinitely as a background daemon to manage tasks, execute tools, and assist via CLI or HTTP gateway.
+T1a is an ultra-lightweight, autonomous AI agent built in pure C11. Based on the `noclaw` architecture, it is designed for maximum efficiency with a near-zero resource footprint. T1a acts as a high-performance command unit, capable of running indefinitely as a background daemon to manage tasks, execute tools, and assist via Telegram, CLI, or HTTP gateway.
 
-## Key Capabilities
+## ✨ Key Capabilities
 
-- **Ultra-Efficient**: ~100KB binary, <5MB RAM usage. Zero external runtime dependencies.
-- **Daemon-Ready**: Built for 24/7 operation with self-healing process management, signal handling (`SIGINT`/`SIGTERM`), and automated resource cleanup.
-- **Full MCP Support**: Native, robust Model Context Protocol (MCP) client. Drives complex toolchains (Postgres, Filesystem, Search) with full handshake and timeout management.
-- **Self-Managing Memory**: Implements a "flat-file" memory system with automatic pruning and trimming to prevent disk bloat over time.
-- **Resilient Autonomy**: Features a sliding-window context buffer with memory compaction, preventing OOM crashes during long-running sessions.
+- **Ultra-Efficient**: ~80KB binary, <5MB RAM usage. Zero external runtime dependencies.
+- **Daemon-Ready (Always-On)**: Native integration with `systemd` for 24/7 "Immortal" operation.
+- **Full MCP Support**: Native, robust Model Context Protocol (MCP) client. Supports persistent connections to servers like Tavily, Sequential Thinking, and Memory Graph.
+- **Self-Managing Memory**: High-density flat-file memory system with automatic pruning and "Memory Compaction" to prevent context bloat.
+- **Robust JSON/HTTP**: Custom-built, standard-compliant JSON-RPC layer with strict character escaping to ensure compatibility with various LLM providers (OpenRouter, OpenAI, Gemini).
 
-## Architecture
+## 🏗️ Architecture
 
 T1a utilizes a modular, function-pointer based architecture for extreme flexibility without bloat:
 
-- **Core**: Event loop driven by non-blocking I/O (via `select`).
-- **Providers**: Native support for Anthropic (Claude 3.5 Sonnet) and OpenAI-compatible APIs.
-- **Tools**: Built-in shell, filesystem I/O, and dynamic MCP proxying.
-- **Memory**: Persistent flat-file backend with semantic-like keyword search and auto-garbage collection.
+- **Core**: Event loop driven by non-blocking I/O.
+- **Providers**: Native TLS support for OpenAI-compatible APIs (Llama 3.3, Gemini 2.0 Flash, etc.).
+- **Tools**: Built-in shell, filesystem I/O, and native MCP orchestration.
+- **Persistence**: Persistent memories stored at `workspace/memories.tsv` with auto-garbage collection.
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Build
 ```bash
-make release
+make clean && make release
 ```
 
-### Configuration
-Managed via `~/.noclaw/config.json`. T1a auto-generates optimized defaults on first run.
-
+### Setup Always-On (Systemd)
+To ensure T1a stays running after reboots or crashes:
 ```bash
-# Initialize configuration
-./noclaw onboard --api-key sk-or-... --provider openrouter
+mkdir -p ~/.config/systemd/user/
+cat > ~/.config/systemd/user/t1a.service <<EOF
+[Unit]
+Description=T1a AI Agent - Always On
+After=network.target
+
+[Service]
+Environment=NOCLAW_TELEGRAM_TOKEN=your_token_here
+WorkingDirectory=$(pwd)
+ExecStart=$(pwd)/noclaw agent --channel telegram
+Restart=always
+RestartSec=10
+StandardOutput=append:~/t1a_final.log
+StandardError=append:~/t1a_final.log
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable t1a.service
+systemctl --user start t1a.service
 ```
 
-### Execution
+### Control
+- **Cek Status**: `systemctl --user status t1a`
+- **Restart**: `systemctl --user restart t1a`
+- **Intip Log**: `tail -f ~/t1a_final.log`
 
-```bash
-# Run as an interactive CLI agent
-./noclaw agent
+## 🛠️ MCP Toolsets
+T1a currently drives a powerful trio of MCP servers (configured in `~/.noclaw/mcp.json`):
+1. **Tavily**: Web research, crawling, and content extraction.
+2. **Sequential Thinking**: Structured, reflective problem-solving.
+3. **Memory Graph**: Knowledge graph-based long-term memory.
 
-# Run as a background daemon (Telegram/Gateway mode)
-./noclaw agent --channel telegram &
-```
-
-## Daemon Features
-
-- **Graceful Shutdown**: Catches termination signals to kill child MCP processes, preventing zombies.
-- **Anti-Stuck Logic**: Detects and breaks infinite reasoning loops.
-- **Heartbeat**: Periodic self-checks to ensure system stability.
-
-## Philosophy
+## 🧘 Philosophy
 
 - **Efficiency First**: No wasted cycles, no unnecessary allocations.
-- **Robustness**: Designed to run for months without restarting.
-- **Pragmatism**: Solves problems using standard syscalls and simple algorithms.
+- **Robustness**: Designed to handle malformed data and network flutters gracefully.
+- **Pragmatism**: Solves problems using standard syscalls and simple, readable C code.
 
 ---
 *"Wong edan mah ajaib."*
