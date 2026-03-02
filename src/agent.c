@@ -86,6 +86,41 @@ static const char *build_tools_json(nc_agent *agent) {
     return buf;
 }
 
+/* ── Memory Compaction ────────────────────────────────────────── */
+
+/* Compacts the agent's arena by creating a new one and copying only active messages. */
+static void agent_compact_memory(nc_agent *agent) {
+    nc_log(NC_LOG_INFO, "Compacting memory arena...");
+    
+    nc_arena new_arena;
+    nc_arena_init(&new_arena, 256 * 1024);
+
+    /* Rebuild messages array in the new arena */
+    for (int i = 0; i < agent->message_count; i++) {
+        nc_message *msg = &agent->messages[i];
+        
+        msg->role = nc_arena_dup(&new_arena, msg->role, strlen(msg->role));
+        if (msg->content)
+            msg->content = nc_arena_dup(&new_arena, msg->content, strlen(msg->content));
+        
+        if (msg->tool_call_id)
+            msg->tool_call_id = nc_arena_dup(&new_arena, msg->tool_call_id, strlen(msg->tool_call_id));
+            
+        if (msg->tool_calls && msg->tool_call_count > 0) {
+            nc_tool_call *new_tcs = (nc_tool_call *)nc_arena_alloc(&new_arena, 
+                msg->tool_call_count * sizeof(nc_tool_call));
+            if (new_tcs) {
+                memcpy(new_tcs, msg->tool_calls, msg->tool_call_count * sizeof(nc_tool_call));
+                msg->tool_calls = new_tcs;
+            }
+        }
+    }
+
+    /* Free old arena and swap */
+    nc_arena_free(&agent->arena);
+    agent->arena = new_arena;
+}
+
 /* ── Add message to history ───────────────────────────────────── */
 
 static void agent_push_msg(nc_agent *agent, const char *role, const char *content,
@@ -93,9 +128,13 @@ static void agent_push_msg(nc_agent *agent, const char *role, const char *conten
                            const nc_tool_call *tool_calls, int tool_call_count) {
     if (agent->message_count >= NC_MAX_MESSAGES) {
         int keep = NC_MAX_MESSAGES / 2;
+        /* Shift messages to keep the last half + system prompt at [0] */
         memmove(&agent->messages[1], &agent->messages[agent->message_count - keep],
                 (size_t)keep * sizeof(nc_message));
         agent->message_count = 1 + keep;
+        
+        /* Trigger garbage collection to free space from dropped messages */
+        agent_compact_memory(agent);
     }
 
     nc_message *msg = &agent->messages[agent->message_count++];
@@ -137,6 +176,7 @@ const char *nc_agent_chat(nc_agent *agent, const char *user_input) {
         /* Force final answer on last iteration by disabling tools */
         if (iter == max_iterations - 1) {
             agent_push_msg(agent, "system", "System: Maximum tool iteration limit reached. Please provide a final response based on the information gathered so far.", NULL, NULL, 0);
+            tools_json = NULL; /* Explicitly disable tools for this request */
         }
 
         nc_chat_request req = {
@@ -144,7 +184,7 @@ const char *nc_agent_chat(nc_agent *agent, const char *user_input) {
             .message_count = agent->message_count,
             .model = agent->config->default_model,
             .temperature = agent->config->default_temperature,
-            .tools_json = (iter == max_iterations - 1) ? NULL : tools_json,
+            .tools_json = tools_json,
             .max_tokens = 8192,
         };
 
