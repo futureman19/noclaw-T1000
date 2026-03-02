@@ -1,6 +1,6 @@
 # T1a: The Autonomous Daemon
 
-T1a is an ultra-lightweight, autonomous AI agent built in pure C11. Based on the `noclaw` architecture, it is designed for maximum efficiency with a near-zero resource footprint. T1a acts as a high-performance command unit, capable of running indefinitely as a background daemon to manage tasks, execute tools, and assist via Telegram, CLI, or HTTP gateway.
+T1a is an ultra-lightweight, autonomous AI agent built in pure C11. Based on the [noclaw](https://github.com/angristan/noclaw) architecture, it is designed for maximum efficiency with a near-zero resource footprint. T1a acts as a high-performance command unit, capable of running indefinitely as a background daemon to manage tasks, execute tools, and assist via Telegram, CLI, or HTTP gateway.
 
 ## Key Capabilities
 
