@@ -180,8 +180,10 @@ static bool openai_chat(nc_provider *self, const nc_chat_request *req, nc_chat_r
     if (!msgs_json) return false;
     openai_build_messages(msgs_json, msgs_buf_sz, req->messages, req->message_count);
 
-    /* Build request body */
-    size_t body_sz = msgs_buf_sz + 1024 + (req->tools_json ? strlen(req->tools_json) : 0);
+    /* Build request body — use actual msgs_json length, not estimate */
+    size_t msgs_actual_len = strlen(msgs_json);
+    size_t tools_len = req->tools_json ? strlen(req->tools_json) : 0;
+    size_t body_sz = msgs_actual_len + tools_len + 4096;  /* generous overhead */
     char *body = (char *)malloc(body_sz);
     if (!body) { free(msgs_json); return false; }
 
@@ -197,6 +199,27 @@ static bool openai_chat(nc_provider *self, const nc_chat_request *req, nc_chat_r
             "{\"model\":\"%s\",\"messages\":%s,\"temperature\":%.2f,\"max_tokens\":%d}",
             req->model, msgs_json, req->temperature,
             req->max_tokens > 0 ? req->max_tokens : 4096);
+    }
+
+    /* Safety: if snprintf was truncated, Content-Length would mismatch */
+    if ((size_t)body_len >= body_sz) {
+        nc_log(NC_LOG_WARN, "Request body truncated (%d > %zu), reallocating", body_len, body_sz);
+        body_sz = (size_t)body_len + 1;
+        char *new_body = (char *)realloc(body, body_sz);
+        if (!new_body) { free(body); free(msgs_json); return false; }
+        body = new_body;
+        if (req->tools_json) {
+            body_len = snprintf(body, body_sz,
+                "{\"model\":\"%s\",\"messages\":%s,\"temperature\":%.2f,\"max_tokens\":%d,\"tools\":%s}",
+                req->model, msgs_json, req->temperature,
+                req->max_tokens > 0 ? req->max_tokens : 4096,
+                req->tools_json);
+        } else {
+            body_len = snprintf(body, body_sz,
+                "{\"model\":\"%s\",\"messages\":%s,\"temperature\":%.2f,\"max_tokens\":%d}",
+                req->model, msgs_json, req->temperature,
+                req->max_tokens > 0 ? req->max_tokens : 4096);
+        }
     }
 
     /* Headers */
