@@ -2,15 +2,15 @@
 
 T1a is an ultra-lightweight, autonomous AI agent built in pure C11. Based on the `noclaw` architecture, it is designed for maximum efficiency with a near-zero resource footprint. T1a acts as a high-performance command unit, capable of running indefinitely as a background daemon to manage tasks, execute tools, and assist via Telegram, CLI, or HTTP gateway.
 
-## ✨ Key Capabilities
+## Key Capabilities
 
 - **Ultra-Efficient**: ~80KB binary, <5MB RAM usage. Zero external runtime dependencies.
-- **Daemon-Ready (Always-On)**: Native integration with `systemd` for 24/7 "Immortal" operation.
+- **Daemon-Ready (Always-On)**: Native integration with `systemd` for 24/7 autonomous operation.
 - **Full MCP Support**: Native, robust Model Context Protocol (MCP) client. Supports persistent connections to servers like Tavily, Sequential Thinking, and Memory Graph.
-- **Self-Managing Memory**: High-density flat-file memory system with automatic pruning and "Memory Compaction" to prevent context bloat.
-- **Robust JSON/HTTP**: Custom-built, standard-compliant JSON-RPC layer with strict character escaping to ensure compatibility with various LLM providers (OpenRouter, OpenAI, Gemini).
+- **Self-Managing Memory**: High-density flat-file memory system with automatic pruning and Memory Compaction to prevent context bloat.
+- **Robust JSON/HTTP**: Standard-compliant JSON-RPC layer with strict character escaping to ensure compatibility with LLM providers including OpenRouter, OpenAI, and Gemini.
 
-## 🏗️ Architecture
+## Architecture
 
 T1a utilizes a modular, function-pointer based architecture for extreme flexibility without bloat:
 
@@ -19,7 +19,7 @@ T1a utilizes a modular, function-pointer based architecture for extreme flexibil
 - **Tools**: Built-in shell, filesystem I/O, and native MCP orchestration.
 - **Persistence**: Persistent memories stored at `workspace/memories.tsv` with auto-garbage collection.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Build
 ```bash
@@ -27,7 +27,7 @@ make clean && make release
 ```
 
 ### Setup Always-On (Systemd)
-To ensure T1a stays running after reboots or crashes:
+To ensure T1a remains operational after reboots or process failures:
 ```bash
 mkdir -p ~/.config/systemd/user/
 cat > ~/.config/systemd/user/t1a.service <<EOF
@@ -54,21 +54,21 @@ systemctl --user start t1a.service
 ```
 
 ### Control
-- **Cek Status**: `systemctl --user status t1a`
-- **Restart**: `systemctl --user restart t1a`
-- **Intip Log**: `tail -f ~/t1a_final.log`
+- **Check Status**: `systemctl --user status t1a`
+- **Restart Process**: `systemctl --user restart t1a`
+- **Monitor Logs**: `tail -f ~/t1a_final.log`
 
-## 🛠️ MCP Toolsets
-T1a currently drives a powerful trio of MCP servers (configured in `~/.noclaw/mcp.json`):
+## MCP Toolsets
+T1a drives a suite of MCP servers (configured in `~/.noclaw/mcp.json`):
 1. **Tavily**: Web research, crawling, and content extraction.
 2. **Sequential Thinking**: Structured, reflective problem-solving.
 3. **Memory Graph**: Knowledge graph-based long-term memory.
 
-## 🧘 Philosophy
+## Philosophy
 
 - **Efficiency First**: No wasted cycles, no unnecessary allocations.
-- **Robustness**: Designed to handle malformed data and network flutters gracefully.
-- **Pragmatism**: Solves problems using standard syscalls and simple, readable C code.
+- **Robustness**: Designed to handle malformed data and network instability gracefully.
+- **Pragmatism**: Solves complex problems using standard syscalls and minimalist C.
 
 ---
 *"Wong edan mah ajaib."*
