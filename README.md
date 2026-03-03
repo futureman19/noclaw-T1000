@@ -4,48 +4,49 @@ T1a is an ultra-lightweight, autonomous AI agent built in pure C11. Based on the
 
 ## Key Capabilities
 
-- **Ultra-Efficient**: ~80KB binary, <5MB RAM usage. Zero external runtime dependencies.
-- **Daemon-Ready (Always-On)**: Self-healing process management, signal handling (`SIGINT`/`SIGTERM`), automated resource cleanup. Native `systemd` integration for 24/7 autonomous operation.
-- **Full MCP Support**: Native, robust Model Context Protocol (MCP) client. Drives complex toolchains (Filesystem, Search, Tavily, Sequential Thinking, Memory Graph) with full handshake and timeout management.
-- **Self-Managing Memory**: Flat-file memory system with semantic-like keyword search, automatic pruning, and memory compaction to prevent context bloat and OOM crashes.
-- **Provider Fallback**: Primary provider (e.g. OpenRouter) with configurable fallback (e.g. Anthropic direct). Automatic switch on failure for resilience.
-- **Robust JSON/HTTP**: Standard-compliant JSON-RPC layer with strict character escaping. Compatible with OpenRouter, OpenAI, Anthropic, and Gemini.
+- **Ultra-Efficient**: ~108KB binary, <5MB RAM usage. Zero external runtime dependencies.
+- **Daemon-Ready (Always-On)**: Native integration with `systemd` for 24/7 autonomous operation. Features self-healing process management and automated resource cleanup.
+- **Full MCP Support**: Native, robust Model Context Protocol (MCP) client. Supports persistent connections to servers like Tavily, Sequential Thinking, and Memory Graph.
+- **Extensive Internal Toolset**: 13+ built-in tools for rapid, zero-dependency task execution.
+- **Self-Managing Memory**: High-density flat-file memory system with automatic pruning and Memory Compaction to prevent context bloat.
+- **Provider Resilience**: Primary provider with configurable fallback (e.g. OpenRouter -> OpenAI). Automatic switch on failure.
+- **Robust JSON/HTTP**: Standard-compliant JSON-RPC layer with strict character escaping for maximum compatibility across LLM providers.
 
 ## Architecture
 
 T1a utilizes a modular, function-pointer based architecture for extreme flexibility without bloat:
 
-- **Core**: Event loop driven by non-blocking I/O (via `select`).
-- **Providers**: Native TLS support for Anthropic (Claude 3.5 Sonnet) and OpenAI-compatible APIs (OpenRouter, Llama 3.3, Gemini 2.0 Flash, etc.).
-- **Tools**: Built-in shell, filesystem I/O, and dynamic MCP proxying.
-- **Persistence**: Memories stored at `workspace/memories.tsv` with auto-garbage collection.
+- **Core**: Event loop driven by non-blocking I/O.
+- **Providers**: Native TLS support for OpenAI-compatible APIs (Llama 3.3, Gemini 2.0 Flash, etc.).
+- **Tools**: Built-in shell, filesystem I/O, and native MCP orchestration.
+- **Persistence**: Persistent memories stored at `workspace/memories.tsv` with auto-garbage collection.
 
-## Quick Start
+## 🛠️ Toolsets
+
+### Internal Tools (Native C)
+1. **`shell`**: Execute system commands.
+2. **`file_read` / `file_write`**: Direct filesystem access.
+3. **`memory_store` / `memory_recall`**: Persistent context management.
+4. **`get_time`**: Local system clock with timezone support (zero network dependency).
+5. **`http_fetch`**: Direct URL fetching using internal HTTP client.
+6. **`list_dir`**: Structured directory listing.
+7. **`sys_info`**: System health, uptime, and resource monitoring.
+8. **`calc`**: Precise math expression evaluator.
+9. **`env_get`**: Safe environment variable retrieval.
+10. **`base64`**: Encode/decode data.
+11. **`hash`**: MD5/SHA256 checksum computation.
+
+### MCP Toolsets
+T1a drives a suite of MCP servers (configured in `~/.noclaw/mcp.json`):
+1. **Tavily**: Web research, crawling, and content extraction.
+2. **Sequential Thinking**: Structured, reflective problem-solving.
+3. **Memory Graph**: Knowledge graph-based long-term memory.
+
+## 🚀 Quick Start
 
 ### Build
 ```bash
-make release
-```
-
-### Configuration
-Managed via `~/.noclaw/config.json`. T1a auto-generates optimized defaults on first run.
-
-```bash
-# Initialize configuration
-./noclaw onboard --api-key sk-or-... --provider openrouter
-```
-
-### Execution
-
-```bash
-# Run as an interactive CLI agent
-./noclaw agent
-
-# Run as a background daemon (Telegram mode)
-./noclaw agent --channel telegram &
-
-# Run HTTP gateway
-./noclaw gateway
+make clean && make release
 ```
 
 ### Setup Always-On (Systemd)
@@ -80,22 +81,10 @@ systemctl --user start t1a.service
 - **Restart Process**: `systemctl --user restart t1a`
 - **Monitor Logs**: `tail -f ~/t1a_final.log`
 
-## Daemon Features
-
-- **Graceful Shutdown**: Catches termination signals to kill child MCP processes, preventing zombies.
-- **Anti-Stuck Logic**: Detects and breaks infinite reasoning loops.
-- **Heartbeat**: Periodic self-checks to ensure system stability.
-
-## MCP Toolsets
-T1a drives a suite of MCP servers (configured in `~/.noclaw/mcp.json`):
-1. **Tavily**: Web research, crawling, and content extraction.
-2. **Sequential Thinking**: Structured, reflective problem-solving.
-3. **Memory Graph**: Knowledge graph-based long-term memory.
-
 ## Philosophy
 
 - **Efficiency First**: No wasted cycles, no unnecessary allocations.
-- **Robustness**: Designed to run for months without restarting. Handles malformed data and network instability gracefully.
+- **Robustness**: Designed to handle malformed data and network instability gracefully.
 - **Pragmatism**: Solves complex problems using standard syscalls and minimalist C.
 
 ---
